@@ -1,0 +1,142 @@
+name: Go GUI CI/CD
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+
+jobs:
+  # ===== Job 1: CI — форматирование, vet, тесты =====
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Install GUI dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            xorg-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            wayland-protocols
+
+      - name: Format check
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "❌ Не отформатировано:"
+            echo "$UNFORMATTED"
+            echo "Запустите локально: gofmt -w ."
+            exit 1
+          fi
+
+      - name: Lint with go vet
+        run: go vet ./...
+
+      - name: Run tests
+        run: go test ./... -v
+
+      - name: Build (smoke check)
+        run: go build -o /tmp/hello-gui .
+
+  # ===== Job 2: CD — публикация бинарников по тегу =====
+  release:
+    needs: test
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: hello-gui-linux-x64
+            extra_ldflags: ""
+          - os: macos-14
+            artifact: hello-gui-macos-arm64
+            extra_ldflags: ""
+          - os: windows-latest
+            artifact: hello-gui-windows-x64.exe
+            extra_ldflags: "-H windowsgui"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Install GUI dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            xorg-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            wayland-protocols
+
+      - name: Setup MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-pkg-config
+
+      - name: Set CC for Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gccPath = Join-Path $env:RUNNER_TEMP "msys64\mingw64\bin\gcc.exe"
+          if (-not (Test-Path $gccPath)) {
+            $gccPath = "C:\msys64\mingw64\bin\gcc.exe"
+          }
+          if (-not (Test-Path $gccPath)) {
+            $found = Get-ChildItem -Path $env:RUNNER_TEMP -Filter "gcc.exe" -Recurse -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -like "*mingw64*" } |
+                     Select-Object -First 1
+            if ($found) { $gccPath = $found.FullName }
+          }
+          if (-not (Test-Path $gccPath)) {
+            throw "gcc.exe not found. Checked: $gccPath"
+          }
+          Write-Host "Found gcc at: $gccPath"
+          $gccUnix = $gccPath -replace '\\', '/'
+          $gccDir = (Split-Path $gccPath -Parent) -replace '\\', '/'
+          echo "CC=$gccUnix" >> $env:GITHUB_ENV
+          echo "$gccDir" >> $env:GITHUB_PATH
+
+      - name: Build GUI binary
+        shell: bash
+        env:
+          CGO_ENABLED: 1
+        run: |
+          go build \
+            -ldflags="-s -w ${{ matrix.extra_ldflags }} -X main.version=${{ github.ref_name }}" \
+            -o ${{ matrix.artifact }} .
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}
+          generate_release_notes: true

@@ -1,0 +1,15 @@
+# Тестовый образ для Go GUI (Fyne)
+# Содержит GUI-зависимости, нужные для сборки и тестов Fyne на Linux.
+FROM golang:1.23
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libgl1-mesa-dev \
+        libegl1-mesa-dev \
+        xorg-dev \
+        libwayland-dev \
+        libxkbcommon-dev \
+        wayland-protocols && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
