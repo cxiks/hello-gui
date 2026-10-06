@@ -489,7 +489,7 @@ docker run --rm `
 rm -f hello-gui-linux-x64
 git status --ignored | grep hello-gui
 ```
-[Арбуз](img/image%20copy%202.png)
+![](img/1.png)
 ---
 
 ## 5. 🌐 Создание пустого репозитория на GitHub
